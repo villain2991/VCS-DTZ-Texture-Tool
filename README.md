@@ -85,7 +85,7 @@ The ultimate goal is to provide a unified texture editing tool for both GTA Stor
 *More details and features will be announced as development progresses.*
 
 
-### 💜 Credits & Acknowledgements
+## 💜 Credits & Acknowledgements
 
 Special thanks to **[gothamor](https://github.com/gothamor)** for the GTA VCS Recomp project, which inspired this tool.
 
