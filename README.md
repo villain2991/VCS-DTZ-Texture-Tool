@@ -59,7 +59,30 @@ The project was created with assistance from **Claude** and inspired by [gothamo
 | **Development assistance** | Claude AI |
 | **Inspired by** | [GTA VCS Recomp](https://github.com/gothamor/gta-vcs-recomp) |
 
----
+## 🚀 Upcoming
+
+### Version 0.5 – VCS ReText Tool
+
+The next major update will introduce a new name and expanded capabilities.
+
+**Planned features:**
+- Expanded texture editing capabilities.
+- Support for additional game files and texture formats.
+- A foundation for broader GTA Stories modding support.
+
+### Future Plans
+
+The long-term goal is to expand the tool beyond the PS2 version of Vice City Stories.
+
+Planned future support includes:
+
+- **GTA: Vice City Stories (PSP)** – Texture file support.
+- **GTA: Liberty City Stories (PS2)** – Texture file support.
+- **GTA: Liberty City Stories (PSP)** – Texture file support.
+
+The ultimate goal is to provide a unified texture editing tool for both GTA Stories titles across PlayStation 2 and PSP.
+
+*More details and features will be announced as development progresses.*
 
 ### 💜 Credits & Acknowledgements
 
