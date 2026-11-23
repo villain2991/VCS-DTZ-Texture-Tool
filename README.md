@@ -1,4 +1,4 @@
-# 🎮 GTA VCS Texture Tool (PS2)
+# 🎮 VCS DTZ Texture Tool (PS2)
 
 **A texture editing tool for Grand Theft Auto: Vice City Stories (PlayStation 2).**
 
@@ -8,7 +8,7 @@ Export, edit, and replace textures stored in the game's `.DTZ` and `.XTX` files.
 
 ## 🖼️ About
 
-GTA VCS Texture Tool is a fan-made utility designed to make texture editing in the PS2 version of **Grand Theft Auto: Vice City Stories** easier and more accessible.
+VCS DTZ Texture Tool is a fan-made utility designed to make texture editing in the PS2 version of **Grand Theft Auto: Vice City Stories** easier and more accessible.
 
 The tool allows you to browse game textures, export them for external editing, and import your modified images back into the original game files.
 
