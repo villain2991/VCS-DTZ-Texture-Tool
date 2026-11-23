@@ -1,0 +1,276 @@
+"""
+dtz_core.py - core logic for the VCS GAME.DTZ texture tool (no UI here).
+
+GAME.DTZ = one zlib stream -> 'GATG' memory image. Each texture has a 16-byte descriptor:
+    u32 0 | u16 width_in_bytes | u16 type | u32 data_offset | u32 flags
+    type 0x25 = 8bpp (256-colour CLUT)   type 0x45 = 4bpp (16-colour CLUT)
+    flags: bits 0-5 = log2(width px), bits 6-11 = log2(height px), top 16 bits = 0x001c
+Pixel data is at data_offset, immediately followed by the CLUT (RGBA, alpha 0..0x80).
+8bpp CLUTs use the PS2 CSM1 swizzle (entries 8-15 <-> 16-23 within each 32).
+"""
+import re, struct, zlib
+
+VERSION = "0.3"
+from PIL import Image
+
+HDR_SIZE_OFFSET = 8          # u32 total image size in the GATG header
+
+
+def _px(im):
+    return list(im.get_flattened_data()) if hasattr(im, 'get_flattened_data') else list(im.getdata())
+
+
+IMPORT_EXTS = ('.png', '.bmp', '.jpg', '.jpeg', '.tga', '.tif', '.tiff', '.webp', '.gif', '.dds')
+EXPORT_FORMATS = {'PNG': '.png', 'BMP': '.bmp', 'TGA': '.tga', 'TIFF': '.tif', 'WEBP': '.webp', 'JPG (no alpha)': '.jpg'}
+RESAMPLE = {'Smooth (Lanczos)': Image.LANCZOS, 'Bicubic': Image.BICUBIC, 'Bilinear': Image.BILINEAR,
+            'Sharp / pixel art (Nearest)': Image.NEAREST}
+MIN_SIDE, MAX_SIDE = 8, 2048
+SIZES = [8, 16, 32, 64, 128, 256, 512, 1024, 2048]
+
+
+def nearest_pow2(n):
+    """Nearest power of two (by ratio) within MIN_SIDE..MAX_SIDE."""
+    import math
+    n = max(1, int(n))
+    p = 2 ** round(math.log2(n))
+    return min(MAX_SIDE, max(MIN_SIDE, p))
+
+
+def has_alpha(im):
+    a = im.convert('RGBA').getchannel('A')
+    return a.getextrema()[0] < 255
+
+
+def count_colours(im, limit=1 << 20):
+    c = im.convert('RGBA').getcolors(maxcolors=limit)
+    return None if c is None else len(c)
+
+
+def load_image(path):
+    """Open any supported image as RGBA. A companion '<name>_alpha.png/.bmp/.tga' (grey-scale) is
+    merged in as the alpha channel when the main image itself has no transparency (e.g. JPG/BMP)."""
+    import os
+    im = Image.open(path); im.load(); im = im.convert('RGBA')
+    stem, ext = os.path.splitext(path)
+    if not stem.lower().endswith('_alpha') and not has_alpha(im):
+        for e in ('.png', '.bmp', '.tga', '.tif'):
+            ap = stem + '_alpha' + e
+            if os.path.exists(ap):
+                a = Image.open(ap).convert('L')
+                if a.size != im.size:
+                    a = a.resize(im.size, Image.BILINEAR)
+                im.putalpha(a); break
+    return im
+
+
+def save_image(im, path, alpha_map=False):
+    """Save RGBA image; formats without alpha (JPG) are flattened and always get a separate alpha map
+    when the image has transparency. Returns list of files written."""
+    import os
+    stem, ext = os.path.splitext(path); ext = ext.lower()
+    out = [path]
+    transp = has_alpha(im)
+    if ext in ('.jpg', '.jpeg'):
+        bg = Image.new('RGB', im.size, (0, 0, 0)); bg.paste(im, mask=im.getchannel('A')); bg.save(path, quality=98)
+        alpha_map = alpha_map or transp
+    else:
+        im.save(path)
+    if alpha_map and transp:
+        ap = stem + '_alpha.png'; im.getchannel('A').save(ap); out.append(ap)
+    return out
+
+
+def prepare(im, W, H, fit='stretch', resample=Image.LANCZOS):
+    """Resize RGBA image to exactly WxH. fit: 'stretch' | 'fit' (keep aspect, transparent padding) |
+    'fill' (keep aspect, centre crop)."""
+    im = im.convert('RGBA')
+    if im.size == (W, H):
+        return im
+    w, h = im.size
+    if fit == 'stretch':
+        return im.resize((W, H), resample)
+    sc = min(W / w, H / h) if fit == 'fit' else max(W / w, H / h)
+    nw, nh = max(1, round(w * sc)), max(1, round(h * sc))
+    r = im.resize((nw, nh), resample)
+    if fit == 'fit':
+        out = Image.new('RGBA', (W, H), (0, 0, 0, 0)); out.paste(r, ((W - nw) // 2, (H - nh) // 2)); return out
+    l, t = (nw - W) // 2, (nh - H) // 2
+    return r.crop((l, t, l + W, t + H))
+
+
+def alpha_view(im):
+    a = im.getchannel('A'); return Image.merge('RGBA', (a, a, a, Image.new('L', im.size, 255)))
+
+
+def opaque_view(im):
+    out = im.copy(); out.putalpha(255); return out
+
+
+class DtzFile:
+    def __init__(self, path):
+        self.path = path
+        self.raw = open(path, 'rb').read()
+        self.original = bytearray(zlib.decompress(self.raw))
+        if self.original[:4] != b'GATG':
+            raise ValueError('Not a GAME.DTZ (inner magic is not GATG).')
+        self.img = bytearray(self.original)
+        self.textures = self._find_textures(self.original)
+        self.changed = set()                      # indexes into self.textures
+        self.resized = set()                      # descriptor offsets that were moved/enlarged
+
+    # ---------- parsing ----------
+    @staticmethod
+    def _find_textures(img):
+        n = len(img); out = []
+        for m in re.finditer(rb'[A-Za-z_][A-Za-z0-9_.\-]{2,40}\x00+', bytes(img)):
+            s = m.start()
+            if s < 16 or s % 16:
+                continue
+            name = m.group().rstrip(b'\0').decode()
+            p0 = struct.unpack_from('<I', img, s - 16)[0]
+            if not (0 < p0 < n - 16):
+                continue
+            a, b, off, fl = struct.unpack_from('<IIII', img, p0)
+            t = b >> 16; wb = b & 0xffff
+            if a != 0 or (fl >> 16) != 0x1c or t not in (0x25, 0x45):
+                continue
+            t_ = DtzFile._mk(name, p0, off, t, fl)
+            if t_ and off + t_['psize'] + t_['ncol'] * 4 <= n:
+                if (wb * (2 if t_['bpp'] == 4 else 1)) == t_['w']:
+                    out.append(t_)
+        return out
+
+    @staticmethod
+    def _mk(name, desc, off, t, fl):
+        W = 1 << (fl & 0x3f); H = 1 << ((fl >> 6) & 0x3f)
+        bpp = 4 if t == 0x45 else 8
+        return dict(name=name, desc=desc, off=off, w=W, h=H, bpp=bpp,
+                    psize=W * H // (2 if bpp == 4 else 1), ncol=16 if bpp == 4 else 256)
+
+    def label(self, i):
+        """Unique display name (duplicates get __2, __3 ...)."""
+        nm = self.textures[i]['name']; k = sum(1 for j in range(i) if self.textures[j]['name'] == nm)
+        return nm if k == 0 else f'{nm}__{k + 1}'
+
+    # ---------- decode ----------
+    @staticmethod
+    def _swz(pal):
+        o = list(pal)
+        for b in range(0, 256, 32):
+            for i in range(8):
+                o[b + 8 + i], o[b + 16 + i] = pal[b + 16 + i], pal[b + 8 + i]
+        return o
+
+    def decode(self, i, source=None):
+        t = self.textures[i]; img = source if source is not None else self.img
+        return self._decode(img, t)
+
+    def _decode(self, img, t):
+        off = t['off']
+        raw = img[off + t['psize']: off + t['psize'] + t['ncol'] * 4]
+        pal = [tuple(raw[k * 4:k * 4 + 4]) for k in range(t['ncol'])]
+        if t['bpp'] == 8:
+            pal = self._swz(pal)
+        pal = [(r, g, b, min(255, a * 2)) for r, g, b, a in pal]
+        px = img[off:off + t['psize']]
+        idx = [v for byte in px for v in (byte & 15, byte >> 4)] if t['bpp'] == 4 else list(px)
+        im = Image.new('RGBA', (t['w'], t['h'])); im.putdata([pal[k] for k in idx])
+        return im
+
+    # ---------- encode ----------
+    def _quantise(self, im, ncol, bpp, dither=False):
+        """-> (pixel bytes, CLUT bytes, preview RGBA image of what the game will show)"""
+        im = im.convert('RGBA')
+        transp = has_alpha(im)
+        if transp:
+            q = im.quantize(colors=ncol, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+        else:
+            q = im.convert('RGB').quantize(colors=ncol, method=Image.Quantize.MEDIANCUT,
+                                           dither=Image.Dither.FLOYDSTEINBERG if dither else Image.Dither.NONE)
+        qp = q.getpalette()[:ncol * 3]; qp += [0] * (ncol * 3 - len(qp))
+        idx = _px(q); rgba = _px(im)
+        asum = [0] * ncol; cnt = [0] * ncol
+        for k, p in zip(idx, rgba):
+            asum[k] += p[3]; cnt[k] += 1
+        pal = [(qp[k * 3], qp[k * 3 + 1], qp[k * 3 + 2], (asum[k] // cnt[k] if cnt[k] else 255)) for k in range(ncol)]
+        pal = [(r, g, b, (a + 1) // 2) for r, g, b, a in pal]        # PS2 alpha 0..0x80
+        shown = [(r, g, b, min(255, a * 2)) for r, g, b, a in pal]
+        prev = Image.new('RGBA', im.size); prev.putdata([shown[k] for k in idx])
+        if bpp == 8:
+            pal = self._swz(pal)
+        if bpp == 4:
+            px = bytes((idx[k] & 15) | (idx[k + 1] << 4) for k in range(0, len(idx), 2))
+        else:
+            px = bytes(idx)
+        return px, b''.join(bytes(c) for c in pal), prev
+
+    def preview_conversion(self, i, im, dither=False):
+        """What texture i would look like after importing im (same size as im)."""
+        t = self.textures[i]
+        return self._quantise(im, t['ncol'], t['bpp'], dither)[2]
+
+    @staticmethod
+    def _pow2(n):
+        return n >= MIN_SIDE and (n & (n - 1)) == 0
+
+    def import_image(self, i, im, allow_resize=True, dither=False):
+        """Replace texture i with PIL image. Same size -> in place. Different size -> append & repoint.
+        Returns 'same' | 'resized' | 'unchanged'."""
+        t = self.textures[i]
+        im = im.convert('RGBA')
+        if im.size == (t['w'], t['h']):
+            if _px(im) == _px(self._decode(self.img, t)):
+                return 'unchanged'
+            px, pal, _ = self._quantise(im, t['ncol'], t['bpp'], dither)
+            self.img[t['off']:t['off'] + t['psize']] = px
+            self.img[t['off'] + t['psize']:t['off'] + t['psize'] + len(pal)] = pal
+            self.changed.add(i); return 'same'
+        if not allow_resize:
+            raise ValueError(f"{self.label(i)}: image is {im.size[0]}x{im.size[1]}, texture is {t['w']}x{t['h']}.")
+        W, H = im.size
+        if not (self._pow2(W) and self._pow2(H)) or W > MAX_SIDE or H > MAX_SIDE:
+            raise ValueError(f'{self.label(i)}: size {W}x{H} must be power-of-two sides ({MIN_SIDE}..{MAX_SIDE}).')
+        px, pal, _ = self._quantise(im, t['ncol'], t['bpp'], dither)
+        while len(self.img) % 64:
+            self.img.append(0)
+        new_off = len(self.img)
+        self.img += px + pal
+        while len(self.img) % 64:
+            self.img.append(0)
+        wb = W // 2 if t['bpp'] == 4 else W
+        lw = W.bit_length() - 1; lh = H.bit_length() - 1
+        fl = (0x1c << 16) | (lh << 6) | lw
+        typ = 0x45 if t['bpp'] == 4 else 0x25
+        struct.pack_into('<IIII', self.img, t['desc'], 0, (typ << 16) | wb, new_off, fl)
+        struct.pack_into('<I', self.img, HDR_SIZE_OFFSET, len(self.img))   # keep header size in sync
+        self.resized.add(t['desc'])
+        for k, o in enumerate(self.textures):
+            if o['desc'] == t['desc']:
+                self.textures[k] = self._mk(o['name'], o['desc'], new_off, typ, fl)
+                self.changed.add(k)
+        return 'resized'
+
+    def revert(self, i):
+        t = self.textures[i]; d = t['desc']
+        self.img[d:d + 16] = self.original[d:d + 16]
+        a, b, off, fl = struct.unpack_from('<IIII', self.original, d)
+        for k, o in enumerate(self.textures):
+            if o['desc'] == d:
+                self.textures[k] = self._mk(o['name'], d, off, b >> 16, fl)
+                self.changed.discard(k)
+        self.resized.discard(d)
+        t = self.textures[i]
+        end = t['off'] + t['psize'] + t['ncol'] * 4
+        self.img[t['off']:end] = self.original[t['off']:end]
+        if not self.resized:                       # nothing enlarged any more: drop appended data
+            del self.img[len(self.original):]
+            self.img[HDR_SIZE_OFFSET:HDR_SIZE_OFFSET + 4] = self.original[HDR_SIZE_OFFSET:HDR_SIZE_OFFSET + 4]
+
+    # ---------- save ----------
+    def build(self):
+        return zlib.compress(bytes(self.img), 9)
+
+    def save(self, path):
+        data = self.build()
+        open(path, 'wb').write(data)
+        return len(data)

@@ -1,0 +1,31 @@
+VCS GAME.DTZ Texture Tool - changelog
+=====================================
+Rule: every change bumps the version number in dtz_core.py (VERSION), README.txt and this file.
+
+0.3
+  - Alpha views: colour + alpha / colour only / alpha only.
+  - Export formats: PNG, BMP, TGA, TIFF, WEBP, JPG; optional separate NAME_alpha.png.
+  - Import accepts PNG, BMP, JPG, TGA, TIFF, WEBP, GIF, DDS; NAME_alpha.* merged as alpha channel.
+  - Import conversion window: nearest power-of-two size, stretch/fit/fill, resize quality,
+    optional dither, preview of the 16/256-colour result.
+  - Folder import: asks once about non-power-of-two images (convert / skip / cancel).
+  - Fixed: folder-import power-of-two check bug found in testing.
+  - Version number shown in the window title.
+
+0.2
+  - Window app (Tkinter) with Start.bat launcher: texture list + search, preview with zoom,
+    export/import single or folder, revert, save with .bak backup.
+  - Larger-size import: new pixels appended at end of image, texture entry repointed,
+    header size field updated (experimental, untested in game).
+
+0.1
+  - Command-line tool (list / export / import / verify).
+  - Format findings: GAME.DTZ = single zlib stream -> 'GATG' memory image; textures are 4-bit
+    (type 0x45, 16-colour CLUT) or 8-bit (type 0x25, 256-colour CLUT, CSM1-swizzled palette)
+    indexed, 16-byte descriptors, pixels followed by CLUT; 193 named textures found.
+  - Repacked DTZ is ~1.7 KB larger than the original (zlib level 9 vs original compressor).
+
+Known / untested
+  - Nothing has been tested inside the game/recomp yet (as of 0.3).
+  - Enlarged textures: UV handling (pixel vs normalised) and header-size tolerance unknown.
+  - gametext holds the PlayStation button glyphs; bigtext does not.
