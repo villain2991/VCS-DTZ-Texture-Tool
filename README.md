@@ -61,7 +61,7 @@ The project was created with assistance from **Claude** and inspired by [gothamo
 
 ## 🚀 Upcoming
 
-### Version 0.5 – VCS ReText Tool
+### Version 0.5 – VCS ReTex Tool
 
 The next major update will introduce a new name and expanded capabilities.
 
