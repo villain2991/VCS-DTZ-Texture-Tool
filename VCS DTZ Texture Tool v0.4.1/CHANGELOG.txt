@@ -1,0 +1,58 @@
+VCS GAME.DTZ Texture Tool - changelog
+=====================================
+Rule: every TOOL change bumps the version number in dtz_core.py (VERSION), README.txt and this file.
+
+0.4.1
+  - NEW: batch mode. "Batch export folder..." exports every .XTX/.DTZ in a folder to one sub-folder per
+    file; "Batch import into new folder..." matches edited images (by file sub-folder, flat name, or
+    single-texture file name), asks once about non-power-of-two sizes, and writes only the modified files
+    to a separate output folder (refuses to use the originals' folder). Progress window.
+  - Tested on a simulated SPLASH folder (3 files + a corrupt file + a stray PNG): mixed naming, JPG,
+    non-power-of-two (convert/skip), enlarged + same-size edits; originals untouched; unmodified
+    re-import writes nothing.
+
+0.4
+  - NEW: opens .XTX texture files (loading screens, EMPHUD.XTX, ...). Same texture records as
+    GAME.DTZ. XTX = raw file: header 'xet\0', size @8, relocation-table offset @12/@16, entry count
+    @20, table at end of file. Enlarged textures are inserted before the table, table moved to the end,
+    header updated; untouched XTX saves byte-identical. Tested on LOADSC0.XTX and EMPHUD.XTX.
+  - FIX: GAME.DTZ now finds 257 textures instead of 193. 64 vehicle/building textures (wheels, licence
+    plates, steering wheels, cracked glass, walls, fences...) use flag group 0x10 instead of 0x1c and
+    were skipped before.
+  - FIX: enlarging a texture now preserves all descriptor flag bits except the two size fields (0.2-0.3
+    wrote 0x1c<<16 and dropped the 0x8/0x4 format nibble; the game still accepted it in testing).
+  - Save dialog proposes the opened file's own name; window/readme/labels mention XTX.
+
+0.3
+  - Alpha views: colour + alpha / colour only / alpha only.
+  - Export formats: PNG, BMP, TGA, TIFF, WEBP, JPG; optional separate NAME_alpha.png.
+  - Import accepts PNG, BMP, JPG, TGA, TIFF, WEBP, GIF, DDS; NAME_alpha.* merged as alpha channel.
+  - Import conversion window: nearest power-of-two size, stretch/fit/fill, resize quality,
+    optional dither, preview of the 16/256-colour result.
+  - Folder import: asks once about non-power-of-two images (convert / skip / cancel).
+  - Fixed: folder-import power-of-two check bug found in testing.
+  - Version number shown in the window title.
+
+0.2
+  - Window app (Tkinter) with Start.bat launcher: texture list + search, preview with zoom,
+    export/import single or folder, revert, save with .bak backup.
+  - Larger-size import: new pixels appended at end of image, texture entry repointed,
+    header size field updated (experimental, untested in game).
+
+0.1
+  - Command-line tool (list / export / import / verify).
+  - Format findings: GAME.DTZ = single zlib stream -> 'GATG' memory image; textures are 4-bit
+    (type 0x45, 16-colour CLUT) or 8-bit (type 0x25, 256-colour CLUT, CSM1-swizzled palette)
+    indexed, 16-byte descriptors, pixels followed by CLUT; 193 named textures found.
+  - Repacked DTZ is ~1.7 KB larger than the original (zlib level 9 vs original compressor).
+
+Test results (not versions)
+  - IN GAME, user-reported 2026-11-23, tested with v0.3: a GAME.DTZ saved by this tool loads in the
+    recomp with an enlarged texture (appended data, repointed descriptor, updated header size);
+    bigtext enlarged to 1024x1024 (4x, same glyph grid) displays correctly, so font glyph lookup is
+    scale-independent. The recomp shows the menu in 4:3; attributed to the recomp, not this tool.
+  - Not yet tested in game: .XTX edits (v0.4), enlarged XTX, other fonts, other texture types.
+
+Known / untested
+  - Still unknown: other font sheets (gametext, fancytext, pagertext), other texture types, mip/other descriptors of the same texture, in-game edge cases.
+  - gametext holds the PlayStation button glyphs; bigtext does not.
